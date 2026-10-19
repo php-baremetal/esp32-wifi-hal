@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.zip binary
+
+# kept out of the package archive (docs/ and README.md stay: the registry renders them)
+/tests export-ignore
+/.github export-ignore
+/.gitattributes export-ignore
+/.gitignore export-ignore
+/phpunit.xml export-ignore
+/phpunit.xml.dist export-ignore

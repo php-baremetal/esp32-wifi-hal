@@ -1,0 +1,15 @@
+{
+  "name": "php-baremetal/esp32-wifi-hal",
+  "description": "ESP32 implementation of the WiFi HAL (bm_wifi_hal.h) over esp_wifi / esp_netif / esp_event. Every driver call runs on the esp32-executor task; another family ships its own <fam>-wifi-hal.",
+  "type": "bm-hal",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Gianfrancesco Aurecchia",
+      "email": "gianfri@aurecchia.com"
+    }
+  ],
+  "require": { "php-baremetal/esp32-executor": "^1.0" },
+  "provide": { "php-baremetal/wifi-hal": "1.0.0" },
+  "extra": { "baremetal": { "platform": "esp32", "idf-requires": ["esp_wifi", "esp_netif", "esp_event", "nvs_flash"] } }
+}

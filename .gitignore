@@ -1,0 +1,15 @@
+# Composer: a package does not ship its dependencies or a lock file
+/vendor/
+/composer.lock
+
+# build output and local php-baremetal state
+/build/
+/.phpbm/
+/node_modules/
+*.zip
+
+# local and editor files
+.env
+.idea/
+.vscode/
+.DS_Store
