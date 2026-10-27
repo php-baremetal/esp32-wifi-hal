@@ -17,7 +17,7 @@ station, access point, connection state) over `esp_wifi`, `esp_netif` and `esp_e
 
 Projects do not require it. A project requires `php-baremetal/ext-wifi`, and conductor adds
 `php-baremetal/esp32-wifi-hal` (and with it `esp32-executor`) because the project's SDK
-(`"sdk": "esp32@^1.0"`) has the platform `esp32`:
+(`"sdk": "esp32@^2.0"`) has the platform `esp32`:
 
 ```bash
 composer require php-baremetal/ext-wifi
