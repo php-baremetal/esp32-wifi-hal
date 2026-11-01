@@ -37,6 +37,7 @@
 #define SCAN_DONE       BIT1
 #define WIFI_ENQUEUE_MS 1000
 #define SCAN_TIMEOUT_MS 15000
+#define STA_RETRIES     10   /* automatic reconnects after a drop, refilled on every IP */
 
 static const char *TAG = "php-wifi";
 
@@ -49,7 +50,8 @@ static esp_netif_t *s_ap_netif  = NULL;
 static EventGroupHandle_t s_events = NULL;
 static portMUX_TYPE s_ip_lock = portMUX_INITIALIZER_UNLOCKED;
 static char s_sta_ip[16] = "";
-/* Both guarded by s_ip_lock (written on the executor, read-modify-written on the event task). */
+/* Guarded by s_ip_lock (written on the executor, read-modify-written on the event task). */
+static bool s_sta_want  = false;   /* PHP wants the station connected: off after a disconnect or a timeout */
 static int s_sta_retry  = 0;   /* auto-retries left for the connect in progress (0 = give up) */
 static int s_sta_ignore = 0;   /* disconnect events caused by our own esp_wifi_disconnect(), to skip */
 
@@ -95,7 +97,7 @@ static void wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (s_sta_ignore > 0) {
             s_sta_ignore--;
             ignore = true;
-        } else if (s_sta_retry > 0) {
+        } else if (s_sta_want && s_sta_retry > 0) {
             s_sta_retry--;
             retry = true;
         }
@@ -115,8 +117,18 @@ static void wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
         ip_event_got_ip_t *e = (ip_event_got_ip_t *) data;
         char ip[16];
         snprintf(ip, sizeof ip, IPSTR, IP2STR(&e->ip_info.ip));
-        set_sta_ip(ip);
-        xEventGroupSetBits(s_events, STA_GOT_IP);
+        /* Connected: refill the budget, so a later drop is retried as many times as the first join.
+         * An IP queued before a disconnect or a timeout is dropped, or retries would start again. */
+        portENTER_CRITICAL(&s_ip_lock);
+        bool want = s_sta_want;
+        if (want) {
+            s_sta_retry = STA_RETRIES;
+            strlcpy(s_sta_ip, ip, sizeof s_sta_ip);
+        }
+        portEXIT_CRITICAL(&s_ip_lock);
+        if (want) {
+            xEventGroupSetBits(s_events, STA_GOT_IP);
+        }
     }
 }
 
@@ -137,6 +149,11 @@ static esp_err_t do_init(void *arg)
     err = esp_wifi_init(&cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "wifi init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    /* Keep the SSID and password in RAM: by default the driver also writes them, in clear, to NVS. */
+    err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    if (err != ESP_OK) {
         return err;
     }
     if (s_events == NULL) {
@@ -305,13 +322,14 @@ static esp_err_t do_sta_connect(void *arg)
 {
     wifi_op_t *op = arg;
     wifi_config_t wc = { 0 };
-    strlcpy((char *) wc.sta.ssid, op->ssid, sizeof wc.sta.ssid);
+    /* The fields are not NUL-terminated at full length: a 32-byte SSID or a 64-digit PSK fills them. */
+    memcpy(wc.sta.ssid, op->ssid, strnlen(op->ssid, sizeof wc.sta.ssid));
     /* Scan every channel and pick the strongest match -- more robust than the default fast scan,
      * which stops at the first hit and can miss WPA2/WPA3-transition APs. */
     wc.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     wc.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     if (op->password && op->password[0]) {
-        strlcpy((char *) wc.sta.password, op->password, sizeof wc.sta.password);
+        memcpy(wc.sta.password, op->password, strnlen(op->password, sizeof wc.sta.password));
         wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
         /* Support WPA2/WPA3-transition APs (common on phone hotspots): PMF-capable and WPA3-SAE
          * with both hunt-and-peck and hash-to-element. Harmless for plain WPA2 networks. */
@@ -343,7 +361,8 @@ static esp_err_t do_sta_connect(void *arg)
     set_sta_ip("");
     xEventGroupClearBits(s_events, STA_GOT_IP);
     portENTER_CRITICAL(&s_ip_lock);
-    s_sta_retry = 10;   /* auto-retry transient association drops during this connect */
+    s_sta_retry = STA_RETRIES;   /* auto-retry transient association drops during this connect */
+    s_sta_want = true;
     portEXIT_CRITICAL(&s_ip_lock);
     return esp_wifi_connect();
 }
@@ -352,10 +371,12 @@ static esp_err_t do_sta_disconnect(void *arg)
 {
     (void) arg;
     portENTER_CRITICAL(&s_ip_lock);
+    s_sta_want = false;
     s_sta_retry = 0;
     portEXIT_CRITICAL(&s_ip_lock);
     esp_wifi_disconnect();
     set_sta_ip("");
+    xEventGroupClearBits(s_events, STA_GOT_IP);
     return ESP_OK;
 }
 
@@ -434,12 +455,12 @@ static esp_err_t do_ap_start(void *arg)
         }
     }
     wifi_config_t wc = { 0 };
-    strlcpy((char *) wc.ap.ssid, op->ssid, sizeof wc.ap.ssid);
-    wc.ap.ssid_len = (uint8_t) strlen((const char *) wc.ap.ssid);
+    wc.ap.ssid_len = (uint8_t) strnlen(op->ssid, sizeof wc.ap.ssid);
+    memcpy(wc.ap.ssid, op->ssid, wc.ap.ssid_len);
     wc.ap.channel = (uint8_t) op->channel;
     wc.ap.max_connection = (uint8_t) op->max_conn;
     if (op->password && strlen(op->password) >= 8) {
-        strlcpy((char *) wc.ap.password, op->password, sizeof wc.ap.password);
+        memcpy(wc.ap.password, op->password, strnlen(op->password, sizeof wc.ap.password));
         wc.ap.authmode = WIFI_AUTH_WPA2_PSK;
     } else {
         /* WPA2 needs >= 8 chars; anything shorter (or none) opens the network. */
