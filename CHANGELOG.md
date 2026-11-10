@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0
+
+- Added: wifi-hal contract 1.2 (`"provide": {"php-baremetal/wifi-hal": "1.2.0"}`):
+  `bm_wifi_hal_sta_set_power_save()` sets the station's power save with `esp_wifi_set_ps()` (`NONE`:
+  `WIFI_PS_NONE`, `MIN`: `WIFI_PS_MIN_MODEM`, `MAX`: `WIFI_PS_MAX_MODEM`), at once and for the following
+  connects. A mode already set does not reach the driver again; a mode the driver refuses (`NONE` while
+  Bluetooth shares the radio) returns false and leaves the previous one. Nothing changes until the first call:
+  the ESP-IDF default, `WIFI_PS_MIN_MODEM`, stays.
+
 ## 1.1.0
 
 - Added: wifi-hal contract 1.1 (`"provide": {"php-baremetal/wifi-hal": "1.1.0"}`). One listener hears the

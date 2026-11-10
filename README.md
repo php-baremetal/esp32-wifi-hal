@@ -2,14 +2,14 @@
 
 The ESP32 side of [ext-wifi](package:php-baremetal/ext-wifi): the whole Wi-Fi lifecycle (radio init, scan,
 station, access point, connection state) over `esp_wifi`, `esp_netif` and `esp_event`. It implements
-`bm_wifi_hal.h` from ext-wifi (contract 1.1), and runs every driver call made for PHP on the executor task
+`bm_wifi_hal.h` from ext-wifi (contract 1.2), and runs every driver call made for PHP on the executor task
 of [esp32-executor](package:php-baremetal/esp32-executor).
 
 | Key | Value |
 | --- | --- |
 | Type | `bm-hal` |
 | Platform | `esp32` (`extra.baremetal.platform`) |
-| Provides | `php-baremetal/wifi-hal` 1.1.0 |
+| Provides | `php-baremetal/wifi-hal` 1.2.0 |
 | Requires | `php-baremetal/esp32-executor` |
 | ESP-IDF components | `esp_wifi`, `esp_netif`, `esp_event`, `nvs_flash` |
 
@@ -66,6 +66,14 @@ count starts again at every address. Two password refusals in a row before the f
 timeout the attempt is stopped, so the board cannot connect after reporting failure, and `STA_GAVE_UP`
 (reason `OTHER`, code 0) is delivered before the call returns false. A waiting connect that succeeds returns
 true after the listener has heard `STA_GOT_IP`.
+
+**Power save.** `bm_wifi_hal_sta_set_power_save()` calls `esp_wifi_set_ps()` on the executor: `NONE` is
+`WIFI_PS_NONE`, `MIN` is `WIFI_PS_MIN_MODEM` (the ESP-IDF default, kept until the first call) and `MAX` is
+`WIFI_PS_MAX_MODEM` (the station's listen interval is the driver's default, 3 beacons). The mode applies at once,
+to an association already up as well, and stays for the following connects; a call with the mode already set
+does not reach the driver. The driver refuses `NONE` while Bluetooth shares the radio: the call returns false,
+logs `power save .. refused`, and the previous mode stays. Modem sleep only concerns the station: the access
+point keeps its radio on.
 
 **Access point.** SSID and password as given; WPA2-PSK when the password has 8 or more characters, otherwise
 open. Channel and maximum stations are passed to the driver unchecked.

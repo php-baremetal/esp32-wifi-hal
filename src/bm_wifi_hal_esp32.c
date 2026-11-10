@@ -12,7 +12,7 @@
 */
 
 /*
- * ESP32 implementation of the WiFi HAL (bm_wifi_hal.h, contract 1.1) over esp_wifi / esp_netif / esp_event.
+ * ESP32 implementation of the WiFi HAL (bm_wifi_hal.h, contract 1.2) over esp_wifi / esp_netif / esp_event.
  * Holds the whole lifecycle: one-time bring-up, the event-driven connection state (got-IP via an event group),
  * STA scan/join, SoftAP, and the listener. The neutral binding (wifi.c) is unaware of all of it.
  *
@@ -1013,6 +1013,38 @@ bool bm_wifi_hal_sta_connect_ex(const char *ssid, const char *password, int time
 bool bm_wifi_hal_sta_connect(const char *ssid, const char *password, int timeout_ms)
 {
     return bm_wifi_hal_sta_connect_ex(ssid, password, timeout_ms, true, STA_RETRIES);
+}
+
+/* The station's power save last applied (-1: none yet, the driver's default). Executor only. */
+static int s_ps = -1;
+
+static esp_err_t do_sta_set_ps(void *arg)
+{
+    wifi_op_t *op = arg;
+    if (op->value == s_ps) {
+        return ESP_OK;
+    }
+    wifi_ps_type_t t = op->value == BM_WIFI_PS_NONE ? WIFI_PS_NONE
+                     : op->value == BM_WIFI_PS_MAX  ? WIFI_PS_MAX_MODEM : WIFI_PS_MIN_MODEM;
+    esp_err_t err = esp_wifi_set_ps(t);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "power save %d refused: %s", op->value, esp_err_to_name(err));
+        return err;
+    }
+    s_ps = op->value;
+    return ESP_OK;
+}
+
+bool bm_wifi_hal_sta_set_power_save(bm_wifi_ps_t ps)
+{
+    if (ps != BM_WIFI_PS_NONE && ps != BM_WIFI_PS_MIN && ps != BM_WIFI_PS_MAX) {
+        return false;
+    }
+    if (bm_wifi_hal_init() != 0) {
+        return false;
+    }
+    wifi_op_t op = { .value = (int) ps };
+    return run(do_sta_set_ps, &op) == ESP_OK;
 }
 
 void bm_wifi_hal_sta_disconnect(void)
