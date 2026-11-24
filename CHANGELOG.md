@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.1
+
+- Fixed: a bring-up that fails after `esp_wifi_init()` succeeded (setting the RAM storage, creating the event
+  group, registering an event handler) now unregisters the handlers it registered and calls `esp_wifi_deinit()`.
+  Before, the driver kept its memory, including its static buffers in internal RAM, and every later call failed
+  with `ESP_ERR_INVALID_STATE` because the driver was already initialized. A failure of `esp_wifi_init()` itself
+  needs nothing more: ESP-IDF v6.1 deinitializes inside `esp_wifi_init()`, and `esp_wifi_deinit()` would return
+  `ESP_ERR_WIFI_NOT_INIT`. The internal RAM still missing after such a failure (up to ~8.8 KB measured on an
+  ESP32-S3) is held inside the ESP-IDF Wi-Fi driver and cannot be given back through its public API.
+
 ## 1.2.0
 
 - Added: wifi-hal contract 1.2 (`"provide": {"php-baremetal/wifi-hal": "1.2.0"}`):

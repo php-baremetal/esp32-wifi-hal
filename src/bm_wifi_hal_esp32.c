@@ -616,6 +616,50 @@ static void wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
     }
 }
 
+/* The handlers do_init() registered: kept so that a failed bring-up can take them back. */
+static esp_event_handler_instance_t s_handlers[4];
+
+static void unregister_handlers(void)
+{
+    const esp_event_base_t bases[] = { WIFI_EVENT, IP_EVENT, IP_EVENT, BM_HAL_BASE };
+    const int32_t ids[] = { ESP_EVENT_ANY_ID, IP_EVENT_STA_GOT_IP, IP_EVENT_STA_LOST_IP, ESP_EVENT_ANY_ID };
+    for (size_t i = 0; i < sizeof s_handlers / sizeof s_handlers[0]; i++) {
+        if (s_handlers[i] != NULL) {
+            esp_event_handler_instance_unregister(bases[i], ids[i], s_handlers[i]);
+            s_handlers[i] = NULL;
+        }
+    }
+}
+
+/* After esp_wifi_init() succeeded: storage, event group, handlers. */
+static esp_err_t init_after_driver(void)
+{
+    /* Keep the SSID and password in RAM: by default the driver also writes them, in clear, to NVS. */
+    esp_err_t err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (s_events == NULL) {
+        s_events = xEventGroupCreate();
+    }
+    if (s_events == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    /* WIFI_EVENT (any id) brings SCAN_DONE, STA_CONNECTED/DISCONNECTED, AP_START/STOP and
+     * AP_STACONNECTED/STADISCONNECTED; the rest of the ids are ignored. */
+    err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_evt, NULL, &s_handlers[0]);
+    if (err == ESP_OK) {
+        err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_evt, NULL, &s_handlers[1]);
+    }
+    if (err == ESP_OK) {
+        err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_LOST_IP, wifi_evt, NULL, &s_handlers[2]);
+    }
+    if (err == ESP_OK) {
+        err = esp_event_handler_instance_register(BM_HAL_BASE, ESP_EVENT_ANY_ID, wifi_evt, NULL, &s_handlers[3]);
+    }
+    return err;
+}
+
 static esp_err_t do_init(void *arg)
 {
     (void) arg;
@@ -632,31 +676,18 @@ static esp_err_t do_init(void *arg)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     err = esp_wifi_init(&cfg);
     if (err != ESP_OK) {
+        /* Nothing to undo here: when its driver init fails, esp_wifi_init() already deinitializes (ESP-IDF v6.1
+         * wifi_init.c, `_deinit:`), and esp_wifi_deinit() would only return ESP_ERR_WIFI_NOT_INIT. */
         ESP_LOGE(TAG, "wifi init failed: %s", esp_err_to_name(err));
         return err;
     }
-    /* Keep the SSID and password in RAM: by default the driver also writes them, in clear, to NVS. */
-    err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    err = init_after_driver();
     if (err != ESP_OK) {
-        return err;
-    }
-    if (s_events == NULL) {
-        s_events = xEventGroupCreate();
-    }
-    if (s_events == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
-    /* WIFI_EVENT (any id) brings SCAN_DONE, STA_CONNECTED/DISCONNECTED, AP_START/STOP and
-     * AP_STACONNECTED/STADISCONNECTED; the rest of the ids are ignored. */
-    err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_evt, NULL, NULL);
-    if (err == ESP_OK) {
-        err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_evt, NULL, NULL);
-    }
-    if (err == ESP_OK) {
-        err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_LOST_IP, wifi_evt, NULL, NULL);
-    }
-    if (err == ESP_OK) {
-        err = esp_event_handler_instance_register(BM_HAL_BASE, ESP_EVENT_ANY_ID, wifi_evt, NULL, NULL);
+        /* The driver is up but the HAL is not: give its memory back, so that the next call starts again from
+         * esp_wifi_init() instead of failing with ESP_ERR_INVALID_STATE for good. */
+        ESP_LOGE(TAG, "wifi setup failed: %s", esp_err_to_name(err));
+        unregister_handlers();
+        esp_wifi_deinit();
     }
     return err;
 }
